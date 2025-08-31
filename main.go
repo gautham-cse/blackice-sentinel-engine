@@ -40,7 +40,7 @@ var (
 func verifyJWT(tokenString string) (string, error) {
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexcepted signing method: %v", t.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return jwtSecret, nil
 	})
@@ -143,6 +143,27 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func getJWTHandler(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user")
+	if userID == "" {
+		http.Error(w, "Missing user parameter", http.StatusBadRequest)
+		return
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"userID": userID,
+		"exp":    time.Now().Add(24 * time.Hour).Unix(),
+	})
+
+	tokenString, err := token.SignedString(jwtSecret)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Write([]byte(tokenString))
+}
+
 func main() {
 	port := "8080"
 	if p := os.Getenv("PORT"); p != "" {
@@ -151,9 +172,9 @@ func main() {
 
 	http.Handle("/", http.FileServer(http.Dir("./public"))) // serve test.html
 	http.HandleFunc("/ws", wsHandler)
+	http.HandleFunc("/get_jwt", getJWTHandler) // auto JWT endpoint
 
 	// Production-ready: let hosting platform handle TLS
 	log.Println("BSP signaling server running on port", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
-
 }

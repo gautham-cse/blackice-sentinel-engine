@@ -3,83 +3,104 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BSP Signaling Test</title>
+  <title>BlackIce Signaling Protocol</title>
+
   <style>
-    body { font-family: Arial; padding: 20px; }
-    #messages { border: 1px solid #ccc; height: 300px; overflow-y: scroll; padding: 10px; }
-    input, button { padding: 10px; margin: 5px 0; width: 100%; }
+    body {
+  font-family: Arial, sans-serif;
+  padding: 20px;
+}
+#messages {
+  border: 1px solid #ccc;
+  height: 200px;
+  overflow-y: scroll;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+input, button {
+  padding: 10px;
+  margin: 5px 0;
+  width: 100%;
+}
+
   </style>
 </head>
 <body>
-  
+<h2>BSP Audio Test</h2>
+
+<label>User ID:</label>
+<input type="text" id="userID" placeholder="alice or bob">
+<label>JWT Token:</label>
+<input type="text" id="jwtToken" placeholder="Paste JWT here">
+<button id="connectBtn">Connect to Signaling</button>
+
+<div id="messages"></div>
+
+<label>Call User ID:</label>
+<input type="text" id="remoteUser" placeholder="Remote userID">
+<button id="callBtn">Start Call</button>
+
+<audio id="remoteAudio" autoplay></audio>
+
+<script src="script.js"></script>
 </body>
 </html>
-<body>
-  <h2>BSP Signaling Test</h2>
-  <label>User ID:</label>
-  <input type="text" id="userID" placeholder="alice or bob">
-  <label>JWT Token:</label>
-  <input type="text" id="jwtToken" placeholder="Paste JWT here">
-  <button id="connectBtn">Connect</button>
 
-  <div id="messages"></div>
-
-  <input type="text" id="toUser" placeholder="Send to userID (bob/alice)">
-  <input type="text" id="msgType" placeholder="Message type (INVITE/ACCEPT/END_CALL)">
-  <button id="sendBtn">Send Message</button>
 
 <script>
-let ws;
+  let ws;
+  let peerConnection;
+  let localStream;
 
-function log(msg) {
-  const messages = document.getElementById("messages");
-  messages.innerHTML += msg + "<br>";
-  messages.scrollTop = messages.scrollHeight;
-}
-
-document.getElementById("connectBtn").onclick = () => {
-  const token = document.getElementById("jwtToken").value;
-  const userID = document.getElementById("userID").value;
-  const serverUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
-
-  ws = new WebSocket(serverUrl);
-
-  ws.onopen = () => {
-    log(`Connected as ${userID}`);
-    // Send JWT
-    ws.send(JSON.stringify({ token }));
-  };
-
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    log(`Received: ${JSON.stringify(msg)}`);
-  };
-
-  ws.onclose = () => {
-    log("Disconnected from server");
-  };
-};
-
-document.getElementById("sendBtn").onclick = () => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    alert("Connect first!");
-    return;
+  // Logging helper
+  function log(msg) {
+    const messages = document.getElementById("messages");
+    messages.innerHTML += msg + "<br>";
+    messages.scrollTop = messages.scrollHeight;
   }
-  const to = document.getElementById("toUser").value;
-  const type = document.getElementById("msgType").value;
-  const from = document.getElementById("userID").value;
 
-  const message = {
-    type: type,
-    from: from,
-    to: to,
-    sessionID: "TEST_SESSION_" + Date.now(),
-    ephemeralPubKey: "TESTKEY"
+  // Generate a random userID if empty
+  function generateUserID() {
+    return "user" + Math.floor(Math.random() * 10000);
+  }
+
+  // Connect to signaling server
+  async function connect() {
+    let userID = document.getElementById("userID").value;
+    if (!userID) {
+      userID = generateUserID();
+      document.getElementById("userID").value = userID;
+    }
+
+    // Auto-fetch JWT from server
+    const res = await fetch(`/get_jwt?user=${userID}`);
+    const token = await res.text();
+
+    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      log(`Connected as ${userID}`);
+      ws.send(JSON.stringify({ token }));
+    };
+
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
+      log("Received: " + JSON.stringify(msg));
+
+      if (msg.type === "INVITE") await startCall(false, msg.from);
+      else if (msg.type === "ACCEPT") {
+        const desc = new RTCSessionDescription(msg.sdp);
+        await peerConnection.setRemoteDescription(desc);
+      } else if (msg.type === "ICE" && peerConnection) {
+        try { await peerConnection.addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
+      }
+    };
+  }
+
+  // Call buttons
+  document.getElementById("connectBtn").onclick = connect;
+  document.getElementById("callBtn").onclick = () => {
+    const remoteID = document.getElementById("remoteUser").value;
+    startCall(true, remoteID);
   };
-
-  ws.send(JSON.stringify(message));
-  log(`Sent: ${JSON.stringify(message)}`);
-};
 </script>
-</body>
-</html>
