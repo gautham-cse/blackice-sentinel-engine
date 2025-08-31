@@ -1,19 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BlackIce Signaling Protocol</title>
-  <style>
-    body { font-family: Arial, sans-serif; padding: 20px; }
-    #messages { border: 1px solid #ccc; height: 200px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
-    input, button { padding: 10px; margin: 5px 0; width: 100%; }
-    ul { padding-left: 20px; }
-    li { margin: 5px 0; cursor: pointer; color: blue; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BlackIce Sentinel Protocol Audio Test</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; }
+  #messages { border: 1px solid #ccc; height: 200px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+  input, button { padding: 10px; margin: 5px 0; width: 100%; }
+  ul { padding-left: 20px; }
+  li { margin: 5px 0; cursor: pointer; color: blue; }
+</style>
 </head>
 <body>
-<h2>BSP Audio Test</h2>
+<h2>BKI Sentinel Protocol</h2>
 
 <label>User ID:</label>
 <input type="text" id="userID" placeholder="userID" readonly>
@@ -29,8 +29,8 @@
 
 <script>
 let ws;
-let peerConnection;
 let localStream;
+const peerConnections = {}; // Reuse per remote user
 const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
 // Logging helper
@@ -45,42 +45,49 @@ function generateUserID() {
   return "user" + Math.floor(Math.random() * 10000);
 }
 
-// Start or answer a call
-async function startCall(isCaller, remoteID) {
-  if (!remoteID) return;
+// Start or accept a call
+async function startCall(remoteID, isCaller) {
+  if (!localStream) {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  }
 
-  localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  peerConnection = new RTCPeerConnection(config);
+  let pc = peerConnections[remoteID];
+  if (!pc) {
+    pc = new RTCPeerConnection(config);
+    peerConnections[remoteID] = pc;
 
-  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-  const remoteAudio = document.getElementById("remoteAudio");
-  peerConnection.ontrack = (event) => {
-    remoteAudio.srcObject = event.streams[0];
-  };
+    pc.ontrack = (event) => {
+      const remoteAudio = document.getElementById("remoteAudio");
+      remoteAudio.srcObject = event.streams[0];
+    };
 
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      ws.send(JSON.stringify({ type: "ICE", to: remoteID, candidate: event.candidate }));
-    }
-  };
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({ type: "ICE", to: remoteID, candidate: event.candidate }));
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      log(`ICE state for ${remoteID}: ${pc.iceConnectionState}`);
+    };
+  }
 
   if (isCaller) {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
     ws.send(JSON.stringify({ type: "INVITE", to: remoteID, sdp: offer, from: document.getElementById("userID").value }));
   }
+
+  return pc;
 }
 
 // Connect to signaling server
 async function connect() {
-  let userID = document.getElementById("userID").value;
-  if (!userID) {
-    userID = generateUserID();
-    document.getElementById("userID").value = userID;
-  }
+  const userID = document.getElementById("userID").value || generateUserID();
+  document.getElementById("userID").value = userID;
 
-  // Fetch JWT from server
   const res = await fetch(`/get_jwt?user=${userID}`);
   const token = await res.text();
 
@@ -93,19 +100,32 @@ async function connect() {
 
   ws.onmessage = async (event) => {
     const msg = JSON.parse(event.data);
-    log("Received: " + JSON.stringify(msg));
+    log(`Received: ${JSON.stringify(msg)}`);
 
-    if (msg.type === "INVITE") {
-      await startCall(false, msg.from);
-      // Send ACCEPT
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      ws.send(JSON.stringify({ type: "ACCEPT", to: msg.from, sdp: answer, from: userID }));
-    } else if (msg.type === "ACCEPT") {
-      const desc = new RTCSessionDescription(msg.sdp);
-      await peerConnection.setRemoteDescription(desc);
-    } else if (msg.type === "ICE" && peerConnection) {
-      try { await peerConnection.addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
+    const remoteID = msg.from;
+    switch (msg.type) {
+      case "INVITE":
+        const pc = await startCall(remoteID, false);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: "ACCEPT", to: remoteID, sdp: answer, from: userID }));
+        break;
+      case "ACCEPT":
+        if (peerConnections[remoteID]) {
+          await peerConnections[remoteID].setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        }
+        break;
+      case "ICE":
+        if (peerConnections[remoteID]) {
+          try { await peerConnections[remoteID].addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
+        }
+        break;
+      case "END_CALL":
+        if (peerConnections[remoteID]) {
+          peerConnections[remoteID].close();
+          delete peerConnections[remoteID];
+        }
+        break;
     }
   };
 }
@@ -119,24 +139,24 @@ async function fetchActiveUsers() {
   const list = document.getElementById("activeUsers");
   list.innerHTML = "";
 
-  users.forEach(u => {
-    const selfID = document.getElementById("userID").value;
-    if (u === selfID) return;
+  const selfID = document.getElementById("userID").value;
 
+  users.forEach(u => {
+    if (u === selfID) return;
     const li = document.createElement("li");
     li.textContent = u;
     li.onclick = async () => {
       log(`Calling ${u}...`);
-      await startCall(true, u);
+      await startCall(u, true);
     };
     list.appendChild(li);
   });
 }
 
-// Periodically refresh active users
+// Auto-refresh active users
 setInterval(fetchActiveUsers, 3000);
 
-// Auto-generate userID and fetch active users on page load
+// Initialize
 window.onload = () => {
   document.getElementById("userID").value = generateUserID();
   fetchActiveUsers();
