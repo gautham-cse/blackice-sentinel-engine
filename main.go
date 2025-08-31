@@ -134,10 +134,10 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 
 		client.LastActivity = time.Now()
 
-		if !allowed(userID) {
+		/* if !allowed(userID) {
 			log.Println("Rate limit exceeded for:", userID)
 			continue
-		}
+		} */
 
 		// Forward signaling messages
 		switch msg.Type {
