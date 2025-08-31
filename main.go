@@ -149,14 +149,11 @@ func main() {
 		port = p
 	}
 
+	http.Handle("/", http.FileServer(http.Dir("./public"))) // serve test.html
 	http.HandleFunc("/ws", wsHandler)
 
-	server := &http.Server{
-		Addr:         ":" + port,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-	}
+	// Production-ready: let hosting platform handle TLS
+	log.Println("BSP signaling server running on port", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 
-	log.Println("Production-ready BSP signaling server running on port", port)
-	log.Fatal(server.ListenAndServeTLS("server.crt", "server.key"))
 }
