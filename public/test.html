@@ -34,6 +34,9 @@ input, button {
 <input type="text" id="jwtToken" placeholder="Paste JWT here">
 <button id="connectBtn">Connect to Signaling</button>
 
+<h3>Active Users</h3>
+<ul id="activeUsers"></ul>
+
 <div id="messages"></div>
 
 <label>Call User ID:</label>
@@ -96,6 +99,35 @@ input, button {
       }
     };
   }
+
+  // Fetch and display active users every 3 seconds
+  async function fetchActiveUsers() {
+    const res = await fetch("/active_users");
+    const users = await res.json();
+    const list = document.getElementById("activeUsers");
+    list.innerHTML = "";
+
+    users.forEach(u => {
+      if (u === document.getElementById("userID").value) return; // skip self
+      const li = document.createElement("li");
+      li.textContent = u;
+      li.style.cursor = "pointer";
+      li.style.color = "blue";
+      li.onclick = () => startCall(true, u); // auto start call when clicked
+      list.appendChild(li);
+    });
+  }
+
+  // Periodically refresh active users
+  setInterval(fetchActiveUsers, 3000);
+
+  // Initial fetch on load
+  window.onload = () => {
+    const id = generateUserID();
+    document.getElementById("userID").value = id;
+    fetchActiveUsers();
+  };
+
 
   // Call buttons
   document.getElementById("connectBtn").onclick = connect;

@@ -164,6 +164,17 @@ func getJWTHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(tokenString))
 }
 
+func activeUsersHandler(w http.ResponseWriter, r *http.Request) {
+	users := []string{}
+	clients.Range(func(key, value interface{}) bool {
+		users = append(users, key.(string))
+		return true
+	})
+	resp, _ := json.Marshal(users)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(resp)
+}
+
 func main() {
 	port := "8080"
 	if p := os.Getenv("PORT"); p != "" {
@@ -173,6 +184,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("./public"))) // serve test.html
 	http.HandleFunc("/ws", wsHandler)
 	http.HandleFunc("/get_jwt", getJWTHandler) // auto JWT endpoint
+	http.HandleFunc("/active_users", activeUsersHandler)
 
 	// Production-ready: let hosting platform handle TLS
 	log.Println("BSP signaling server running on port", port)
