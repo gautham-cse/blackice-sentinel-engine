@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BlackIce Sentinel Audio Test</title>
+<title>BlackIce Sentinel Audio Call</title>
 <style>
   body { font-family: Arial, sans-serif; padding: 20px; }
   #messages { border: 1px solid #ccc; height: 200px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
@@ -13,158 +13,180 @@
 </style>
 </head>
 <body>
-<h2>BlackIce Sentinel Protocol - Audio Test</h2>
+<h2>BlackIce Sentinel Audio Test</h2>
 
 <label>User ID:</label>
 <input type="text" id="userID" placeholder="userID" readonly>
-
-<button id="connectBtn">Connect to Signaling</button>
+<button id="connectBtn">Connect</button>
 
 <h3>Active Users</h3>
 <ul id="activeUsers"></ul>
 
 <div id="messages"></div>
-
-<audio id="remoteAudio" autoplay controls></audio>
+<audio id="remoteAudio" autoplay></audio>
 
 <script>
 let ws;
 let localStream;
 const peerConnections = {}; // one per remote user
-const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
-function log(msg) {
-    const messages = document.getElementById("messages");
-    messages.innerHTML += msg + "<br>";
-    messages.scrollTop = messages.scrollHeight;
-}
-
-// generate random userID
-function generateUserID() {
-    return "user" + Math.floor(Math.random() * 10000);
-}
-
-// start or accept call
-async function startCall(remoteID, isCaller) {
-    if (!localStream) {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    }
-
-    let pc = peerConnections[remoteID];
-    if (!pc) {
-        pc = new RTCPeerConnection(config);
-        peerConnections[remoteID] = pc;
-
-        // Add local mic tracks
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-        // Receive remote audio
-        pc.ontrack = (event) => {
-            const remoteAudio = document.getElementById("remoteAudio");
-            remoteAudio.srcObject = event.streams[0];
-            remoteAudio.play().catch(err => console.log("Autoplay blocked:", err));
-        };
-
-        pc.onicecandidate = (event) => {
-            if (event.candidate) {
-                ws.send(JSON.stringify({ type: "ICE", to: remoteID, candidate: event.candidate }));
-            }
-        };
-
-        pc.oniceconnectionstatechange = () => {
-            log(`ICE state for ${remoteID}: ${pc.iceConnectionState}`);
-        };
-    }
-
-    if (isCaller) {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: "INVITE", to: remoteID, sdp: offer, from: document.getElementById("userID").value }));
-    }
-
-    return pc;
-}
-
-// connect to signaling server
-async function connect() {
-    const userID = document.getElementById("userID").value || generateUserID();
-    document.getElementById("userID").value = userID;
-
-    const res = await fetch(`/get_jwt?user=${userID}`);
-    const token = await res.text();
-
-    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-
-    ws.onopen = () => {
-        log(`Connected as ${userID}`);
-        ws.send(JSON.stringify({ token }));
-    };
-
-    ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
-        log(`Received: ${JSON.stringify(msg)}`);
-        const remoteID = msg.from;
-
-        switch(msg.type) {
-            case "INVITE":
-                const pc = await startCall(remoteID, false);
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                ws.send(JSON.stringify({ type: "ACCEPT", to: remoteID, sdp: answer, from: userID }));
-                break;
-
-            case "ACCEPT":
-                if (peerConnections[remoteID]) {
-                    await peerConnections[remoteID].setRemoteDescription(new RTCSessionDescription(msg.sdp));
-                }
-                break;
-
-            case "ICE":
-                if (peerConnections[remoteID]) {
-                    try { await peerConnections[remoteID].addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
-                }
-                break;
-
-            case "END_CALL":
-                if (peerConnections[remoteID]) {
-                    peerConnections[remoteID].close();
-                    delete peerConnections[remoteID];
-                }
-                break;
-        }
-    };
-}
-
-// fetch and display active users
-async function fetchActiveUsers() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const res = await fetch("/active_users");
-    const users = await res.json();
-    const list = document.getElementById("activeUsers");
-    list.innerHTML = "";
-    const selfID = document.getElementById("userID").value;
-
-    users.forEach(u => {
-        if (u === selfID) return;
-        const li = document.createElement("li");
-        li.textContent = u;
-        li.onclick = async () => {
-            log(`Calling ${u}...`);
-            await startCall(u, true);
-        };
-        list.appendChild(li);
-    });
-}
-
-// auto-refresh active users
-setInterval(fetchActiveUsers, 3000);
-
-// initialize page
-window.onload = () => {
-    document.getElementById("userID").value = generateUserID();
-    fetchActiveUsers();
+// Use STUN and TURN for reliable connectivity
+const config = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    // Optional TURN server
+    // { urls: "turn:YOUR_TURN_SERVER:3478", username: "user", credential: "pass" }
+  ]
 };
 
+// Logging helper
+function log(msg) {
+  const messages = document.getElementById("messages");
+  messages.innerHTML += msg + "<br>";
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// Generate random userID
+function generateUserID() {
+  return "user" + Math.floor(Math.random() * 10000);
+}
+
+// Start or answer a call
+async function startCall(remoteID, isCaller) {
+  if (!localStream) {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+
+  let pc = peerConnections[remoteID];
+  if (!pc) {
+    pc = new RTCPeerConnection(config);
+    peerConnections[remoteID] = pc;
+
+    // Add local audio track
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    pc.ontrack = (event) => {
+    let remoteAudio = document.getElementById(`audio_${remoteID}`);
+    if (!remoteAudio) {
+      remoteAudio = document.createElement("audio");
+      remoteAudio.id = `audio_${remoteID}`;
+      remoteAudio.autoplay = true;
+      remoteAudio.controls = true;
+      document.body.appendChild(remoteAudio);
+    }
+    remoteAudio.srcObject = event.streams[0];
+    remoteAudio.play().catch(console.error);
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({ type: "ICE", to: remoteID, candidate: event.candidate }));
+      }
+    };
+
+    pc.onnegotiationneeded = async () => {
+      if (isCaller) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: "INVITE", to: remoteID, sdp: offer, from: userID }));
+      }
+    };
+
+    // Log ICE connection state
+    pc.oniceconnectionstatechange = () => {
+      log(`ICE state for ${remoteID}: ${pc.iceConnectionState}`);
+    };
+  }
+
+  if (isCaller) {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: "INVITE", to: remoteID, sdp: offer, from: document.getElementById("userID").value }));
+  }
+
+  return pc;
+}
+
+// Connect to BSP signaling server
+async function connect() {
+  const userID = document.getElementById("userID").value || generateUserID();
+  document.getElementById("userID").value = userID;
+
+  // Get JWT
+  const res = await fetch(`/get_jwt?user=${userID}`);
+  const token = await res.text();
+
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    log(`Connected as ${userID}`);
+    ws.send(JSON.stringify({ token }));
+  };
+
+  ws.onmessage = async (event) => {
+    const msg = JSON.parse(event.data);
+    log(`Received: ${JSON.stringify(msg)}`);
+    const remoteID = msg.from;
+
+    switch (msg.type) {
+      case "INVITE":
+        const pc = await startCall(remoteID, false);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: "ACCEPT", to: remoteID, sdp: answer, from: userID }));
+        break;
+      case "ACCEPT":
+        if (peerConnections[remoteID]) {
+          await peerConnections[remoteID].setRemoteDescription(new RTCSessionDescription(msg.sdp));
+        }
+        break;
+      case "ICE":
+        if (peerConnections[remoteID]) {
+          try { await peerConnections[remoteID].addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
+        }
+        break;
+      case "END_CALL":
+        if (peerConnections[remoteID]) {
+          peerConnections[remoteID].close();
+          delete peerConnections[remoteID];
+        }
+        break;
+    }
+  };
+}
+
+// Fetch active users and display
+async function fetchActiveUsers() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const res = await fetch("/active_users");
+  const users = await res.json();
+  const list = document.getElementById("activeUsers");
+  list.innerHTML = "";
+  const selfID = document.getElementById("userID").value;
+
+  users.forEach(u => {
+    if (u === selfID) return;
+    const li = document.createElement("li");
+    li.textContent = u;
+    li.onclick = async () => {
+      log(`Calling ${u}...`);
+      await startCall(u, true);
+    };
+    list.appendChild(li);
+  });
+}
+
+// Auto-refresh active users
+setInterval(fetchActiveUsers, 3000);
+
+// Initialize page
+window.onload = () => {
+  document.getElementById("userID").value = generateUserID();
+  fetchActiveUsers();
+};
+
+// Connect button
 document.getElementById("connectBtn").onclick = connect;
 </script>
 </body>
