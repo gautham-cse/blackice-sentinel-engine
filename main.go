@@ -14,11 +14,13 @@ import (
 )
 
 type Message struct {
-	Type            string `json:"type"`
-	From            string `json:"from"`
-	To              string `json:"to"`
-	SessionID       string `json:"sessionID"`
-	EphemeralPubKey string `json:"ephemeralPubKey"`
+	Type            string      `json:"type"`
+	From            string      `json:"from"`
+	To              string      `json:"to"`
+	SessionID       string      `json:"sessionID,omitempty"`
+	EphemeralPubKey string      `json:"ephemeralPubKey,omitempty"`
+	Sdp             interface{} `json:"sdp,omitempty"`       // SDP offer/answer
+	Candidate       interface{} `json:"candidate,omitempty"` // ICE candidate
 }
 
 type Client struct {
@@ -37,6 +39,7 @@ var (
 	rateMutex = sync.Mutex{}
 )
 
+// Verify JWT and return userID
 func verifyJWT(tokenString string) (string, error) {
 	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -58,6 +61,7 @@ func verifyJWT(tokenString string) (string, error) {
 	return "", jwt.ErrTokenInvalidClaims
 }
 
+// Simple rate limiter per user
 func allowed(userID string) bool {
 	rateMutex.Lock()
 	defer rateMutex.Unlock()
@@ -70,6 +74,7 @@ func allowed(userID string) bool {
 	return true
 }
 
+// Send message to a specific client
 func sendToClient(to string, msg Message) error {
 	c, ok := clients.Load(to)
 	if !ok {
@@ -79,6 +84,7 @@ func sendToClient(to string, msg Message) error {
 	return client.Conn.WriteJSON(msg)
 }
 
+// WebSocket handler
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -87,6 +93,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// Authenticate first message
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		return
@@ -132,8 +139,9 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Forward signaling messages
 		switch msg.Type {
-		case "INVITE", "ACCEPT", "END_CALL":
+		case "INVITE", "ACCEPT", "END_CALL", "ICE":
 			if err := sendToClient(msg.To, msg); err != nil {
 				log.Println("Forward error:", err)
 			}
@@ -143,6 +151,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// JWT endpoint
 func getJWTHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user")
 	if userID == "" {
@@ -164,6 +173,7 @@ func getJWTHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(tokenString))
 }
 
+// Return list of active users
 func activeUsersHandler(w http.ResponseWriter, r *http.Request) {
 	users := []string{}
 	clients.Range(func(key, value interface{}) bool {
@@ -175,6 +185,7 @@ func activeUsersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
+// Main entry point
 func main() {
 	port := "8080"
 	if p := os.Getenv("PORT"); p != "" {
@@ -183,10 +194,9 @@ func main() {
 
 	http.Handle("/", http.FileServer(http.Dir("./public"))) // serve test.html
 	http.HandleFunc("/ws", wsHandler)
-	http.HandleFunc("/get_jwt", getJWTHandler) // auto JWT endpoint
+	http.HandleFunc("/get_jwt", getJWTHandler)
 	http.HandleFunc("/active_users", activeUsersHandler)
 
-	// Production-ready: let hosting platform handle TLS
 	log.Println("BSP signaling server running on port", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

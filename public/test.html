@@ -4,34 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BlackIce Signaling Protocol</title>
-
   <style>
-    body {
-  font-family: Arial, sans-serif;
-  padding: 20px;
-}
-#messages {
-  border: 1px solid #ccc;
-  height: 200px;
-  overflow-y: scroll;
-  padding: 10px;
-  margin-bottom: 10px;
-}
-input, button {
-  padding: 10px;
-  margin: 5px 0;
-  width: 100%;
-}
-
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #messages { border: 1px solid #ccc; height: 200px; overflow-y: scroll; padding: 10px; margin-bottom: 10px; }
+    input, button { padding: 10px; margin: 5px 0; width: 100%; }
+    ul { padding-left: 20px; }
+    li { margin: 5px 0; cursor: pointer; color: blue; }
   </style>
 </head>
 <body>
 <h2>BSP Audio Test</h2>
 
 <label>User ID:</label>
-<input type="text" id="userID" placeholder="alice or bob">
-<label>JWT Token:</label>
-<input type="text" id="jwtToken" placeholder="Paste JWT here">
+<input type="text" id="userID" placeholder="userID" readonly>
+
 <button id="connectBtn">Connect to Signaling</button>
 
 <h3>Active Users</h3>
@@ -39,100 +25,125 @@ input, button {
 
 <div id="messages"></div>
 
-<label>Call User ID:</label>
-<input type="text" id="remoteUser" placeholder="Remote userID">
-<button id="callBtn">Start Call</button>
-
 <audio id="remoteAudio" autoplay></audio>
 
-<script src="script.js"></script>
+<script>
+let ws;
+let peerConnection;
+let localStream;
+const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+// Logging helper
+function log(msg) {
+  const messages = document.getElementById("messages");
+  messages.innerHTML += msg + "<br>";
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// Generate random userID
+function generateUserID() {
+  return "user" + Math.floor(Math.random() * 10000);
+}
+
+// Start or answer a call
+async function startCall(isCaller, remoteID) {
+  if (!remoteID) return;
+
+  localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  peerConnection = new RTCPeerConnection(config);
+
+  localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+  const remoteAudio = document.getElementById("remoteAudio");
+  peerConnection.ontrack = (event) => {
+    remoteAudio.srcObject = event.streams[0];
+  };
+
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      ws.send(JSON.stringify({ type: "ICE", to: remoteID, candidate: event.candidate }));
+    }
+  };
+
+  if (isCaller) {
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: "INVITE", to: remoteID, sdp: offer, from: document.getElementById("userID").value }));
+  }
+}
+
+// Connect to signaling server
+async function connect() {
+  let userID = document.getElementById("userID").value;
+  if (!userID) {
+    userID = generateUserID();
+    document.getElementById("userID").value = userID;
+  }
+
+  // Fetch JWT from server
+  const res = await fetch(`/get_jwt?user=${userID}`);
+  const token = await res.text();
+
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    log(`Connected as ${userID}`);
+    ws.send(JSON.stringify({ token }));
+  };
+
+  ws.onmessage = async (event) => {
+    const msg = JSON.parse(event.data);
+    log("Received: " + JSON.stringify(msg));
+
+    if (msg.type === "INVITE") {
+      await startCall(false, msg.from);
+      // Send ACCEPT
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      ws.send(JSON.stringify({ type: "ACCEPT", to: msg.from, sdp: answer, from: userID }));
+    } else if (msg.type === "ACCEPT") {
+      const desc = new RTCSessionDescription(msg.sdp);
+      await peerConnection.setRemoteDescription(desc);
+    } else if (msg.type === "ICE" && peerConnection) {
+      try { await peerConnection.addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
+    }
+  };
+}
+
+// Fetch and display active users
+async function fetchActiveUsers() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const res = await fetch("/active_users");
+  const users = await res.json();
+  const list = document.getElementById("activeUsers");
+  list.innerHTML = "";
+
+  users.forEach(u => {
+    const selfID = document.getElementById("userID").value;
+    if (u === selfID) return;
+
+    const li = document.createElement("li");
+    li.textContent = u;
+    li.onclick = async () => {
+      log(`Calling ${u}...`);
+      await startCall(true, u);
+    };
+    list.appendChild(li);
+  });
+}
+
+// Periodically refresh active users
+setInterval(fetchActiveUsers, 3000);
+
+// Auto-generate userID and fetch active users on page load
+window.onload = () => {
+  document.getElementById("userID").value = generateUserID();
+  fetchActiveUsers();
+};
+
+// Connect button
+document.getElementById("connectBtn").onclick = connect;
+</script>
 </body>
 </html>
-
-
-<script>
-  let ws;
-  let peerConnection;
-  let localStream;
-
-  // Logging helper
-  function log(msg) {
-    const messages = document.getElementById("messages");
-    messages.innerHTML += msg + "<br>";
-    messages.scrollTop = messages.scrollHeight;
-  }
-
-  // Generate a random userID if empty
-  function generateUserID() {
-    return "user" + Math.floor(Math.random() * 10000);
-  }
-
-  // Connect to signaling server
-  async function connect() {
-    let userID = document.getElementById("userID").value;
-    if (!userID) {
-      userID = generateUserID();
-      document.getElementById("userID").value = userID;
-    }
-
-    // Auto-fetch JWT from server
-    const res = await fetch(`/get_jwt?user=${userID}`);
-    const token = await res.text();
-
-    ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
-
-    ws.onopen = () => {
-      log(`Connected as ${userID}`);
-      ws.send(JSON.stringify({ token }));
-    };
-
-    ws.onmessage = async (event) => {
-      const msg = JSON.parse(event.data);
-      log("Received: " + JSON.stringify(msg));
-
-      if (msg.type === "INVITE") await startCall(false, msg.from);
-      else if (msg.type === "ACCEPT") {
-        const desc = new RTCSessionDescription(msg.sdp);
-        await peerConnection.setRemoteDescription(desc);
-      } else if (msg.type === "ICE" && peerConnection) {
-        try { await peerConnection.addIceCandidate(msg.candidate); } catch(e){ console.error(e); }
-      }
-    };
-  }
-
-  // Fetch and display active users every 3 seconds
-  async function fetchActiveUsers() {
-    const res = await fetch("/active_users");
-    const users = await res.json();
-    const list = document.getElementById("activeUsers");
-    list.innerHTML = "";
-
-    users.forEach(u => {
-      if (u === document.getElementById("userID").value) return; // skip self
-      const li = document.createElement("li");
-      li.textContent = u;
-      li.style.cursor = "pointer";
-      li.style.color = "blue";
-      li.onclick = () => startCall(true, u); // auto start call when clicked
-      list.appendChild(li);
-    });
-  }
-
-  // Periodically refresh active users
-  setInterval(fetchActiveUsers, 3000);
-
-  // Initial fetch on load
-  window.onload = () => {
-    const id = generateUserID();
-    document.getElementById("userID").value = id;
-    fetchActiveUsers();
-  };
-
-
-  // Call buttons
-  document.getElementById("connectBtn").onclick = connect;
-  document.getElementById("callBtn").onclick = () => {
-    const remoteID = document.getElementById("remoteUser").value;
-    startCall(true, remoteID);
-  };
-</script>
