@@ -80,7 +80,12 @@ async function startCall(remoteID, isCaller) {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        ws.send(JSON.stringify({ type: "ICE", to: remoteID, candidate: event.candidate }));
+        ws.send(JSON.stringify({ 
+          type: "ICE", 
+          from: document.getElementById("userID").value,
+          to: remoteID, 
+          candidate: event.candidate 
+        }));
       }
     };
 
@@ -154,6 +159,9 @@ async function connect() {
     }
   };
 }
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+if (audioCtx.state === 'suspended') await audioCtx.resume();
 
 // Fetch active users and display
 async function fetchActiveUsers() {
